@@ -1,0 +1,9 @@
+{
+  "name": "mcp-proxy",
+  "description": "MCP HTTP 反代：给 CC 提供稳定本地端点，上游失败时指数退避重试，绕过 CC 的 5 次重连上限",
+  "service": {
+    "exec": "./index.ts",
+    "restart": "always",
+    "restartSec": 5
+  }
+}

@@ -1,0 +1,71 @@
+<!--
+gws-gmail 默认 HTML 邮件模板（移动友好、克制风格）。
+
+设计原则：
+1. 单列布局，不用 flex / grid（Gmail Mobile / Outlook 对 flexbox 不可靠）
+2. 表格用 <table role="presentation"> + <tr>/<td>，邮件客户端最稳
+3. 最大宽度 640px，全部块 100% 宽，padding 用百分比/像素皆可
+4. 单一强调色（indigo #4f46e5）+ 灰阶，避免一堆鲜色色块
+5. 去掉 stat 卡片、渐变 header、大徽章 pill——克制就是好看
+6. 保留暗色代码块（信息密度高，作为视觉锚点）
+7. 无 footer / 无署名
+
+用法：把整个 <div> 作为 --body，配 --html flag。按需复制 section、增删表格行。
+
+色板：
+  强调色   #4f46e5  （eyebrow / 顶部线 / 链接）
+  正文     #1f2937
+  次要文字 #4b5563 / #6b7280
+  分隔线   #f3f4f6
+  inline code 底色 #f3f4f6
+  暗色 code block  #0f172a / #e2e8f0
+
+代码块里的高亮色（用于架构图、命令）：
+  灰    #94a3b8  注释/连接符
+  黄    #fbbf24  关键 host/port
+  绿    #34d399  上游/成功
+  红    #f87171  警告/失败
+-->
+
+<div style="font-family: -apple-system, 'PingFang SC', 'Segoe UI', Roboto, sans-serif; max-width: 640px; margin: 0 auto; background: #ffffff; color: #1f2937; line-height: 1.6; padding: 0 16px;">
+
+  <!-- HEADER -->
+  <div style="padding: 28px 0 20px; border-bottom: 2px solid #4f46e5;">
+    <div style="font-size: 11px; letter-spacing: 1.5px; color: #6b7280; text-transform: uppercase; margin-bottom: 6px;">{{KICKER}}</div>
+    <h1 style="margin: 0; font-size: 22px; font-weight: 700; color: #111827;">{{TITLE}}</h1>
+    <div style="font-size: 14px; color: #6b7280; margin-top: 4px;">{{SUBTITLE}}</div>
+  </div>
+
+  <!-- SECTION 模板：复制即可加新 section -->
+  <div style="padding: 24px 0 4px;">
+    <div style="font-size: 11px; letter-spacing: 1.5px; color: #4f46e5; text-transform: uppercase; font-weight: 600;">{{SECTION_EYEBROW}}</div>
+    <h2 style="margin: 4px 0 8px; font-size: 16px; color: #111827;">{{SECTION_TITLE}}</h2>
+    <p style="margin: 0 0 8px; font-size: 14px;">{{SECTION_BODY}}</p>
+    <p style="margin: 0; font-size: 14px; color: #4b5563;">{{SECTION_SECONDARY}}</p>
+  </div>
+
+  <!-- TABLE 模板（移动端兼容，无 flex） -->
+  <div style="padding: 24px 0 4px;">
+    <div style="font-size: 11px; letter-spacing: 1.5px; color: #4f46e5; text-transform: uppercase; font-weight: 600;">{{SECTION_EYEBROW}}</div>
+    <h2 style="margin: 4px 0 10px; font-size: 16px; color: #111827;">{{SECTION_TITLE}}</h2>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width: 100%; border-collapse: collapse; font-size: 14px;">
+      <tr>
+        <td style="padding: 8px 0; border-bottom: 1px solid #f3f4f6; width: 40%;"><code style="background: #f3f4f6; padding: 1px 5px; border-radius: 3px; font-size: 13px;">{{ROW_KEY}}</code></td>
+        <td style="padding: 8px 0; border-bottom: 1px solid #f3f4f6; color: #4b5563;">{{ROW_VALUE}}</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- 暗色代码块模板（适合架构图 / 命令 / 日志） -->
+  <div style="background: #0f172a; color: #e2e8f0; padding: 14px 16px; border-radius: 6px; font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 12px; line-height: 1.7; overflow-x: auto;">
+<span style="color: #94a3b8;">prefix</span> <span style="color: #fbbf24;">highlight-key</span> <span style="color: #34d399;">highlight-ok</span> <span style="color: #f87171;">highlight-warn</span>
+  </div>
+
+  <!-- FOOTER 卡片：放次要信息，无署名 -->
+  <div style="padding: 24px 0 32px; border-top: 1px solid #f3f4f6; margin-top: 24px;">
+    <div style="font-size: 13px; color: #6b7280;">
+      <strong style="color: #374151;">{{FOOTER_LABEL}}</strong>{{FOOTER_BODY}}
+    </div>
+  </div>
+
+</div>

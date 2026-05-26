@@ -1,0 +1,5 @@
+{
+  "name": "quickwit",
+  "description": "搜索 Quickwit 日志与事件（otel-logs、otel-traces、agent-events）",
+  "bin": "index.ts"
+}

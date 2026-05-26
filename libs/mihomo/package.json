@@ -1,0 +1,5 @@
+{
+  "name": "mihomo",
+  "description": "管理路由器上的 mihomo 代理服务（启停、配置、日志）",
+  "bin": "index.ts"
+}

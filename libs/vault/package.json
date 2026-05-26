@@ -1,0 +1,5 @@
+{
+  "name": "vault",
+  "description": "路由器 KV 存储，读写敏感配置（密钥、凭据等）",
+  "bin": "index.ts"
+}

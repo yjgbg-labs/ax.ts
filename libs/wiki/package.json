@@ -1,0 +1,5 @@
+{
+  "name": "wiki",
+  "description": "管理 LLM Wiki（位于 $WIKI_DIR，默认 ~/wiki）：列表、搜索、链接、打捞对话",
+  "bin": "index.ts"
+}

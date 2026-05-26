@@ -1,0 +1,5 @@
+{
+  "name": "setup",
+  "description": "运行 libs 中声明的初始化操作",
+  "bin": "index.ts"
+}

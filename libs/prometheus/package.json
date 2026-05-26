@@ -1,0 +1,5 @@
+{
+  "name": "prometheus",
+  "description": "查询 VictoriaMetrics / Prometheus metrics",
+  "bin": "index.ts"
+}

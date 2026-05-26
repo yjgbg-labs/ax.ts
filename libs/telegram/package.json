@@ -1,0 +1,5 @@
+{
+  "name": "telegram",
+  "description": "Telegram Bot 消息收发（send / updates / chats）",
+  "bin": "index.ts"
+}

@@ -1,0 +1,6 @@
+{
+  "workspaces": ["libs/*"],
+  "devDependencies": {
+    "bun-types": "latest"
+  }
+}
