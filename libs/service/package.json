@@ -1,5 +1,5 @@
 {
   "name": "service",
-  "description": "管理 libs 中声明的 user-level systemd 服务（list/enable/disable/start/stop/restart/status）",
+  "description": "管理 libs 中声明的 user-level systemd 服务（list/enable/disable/start/stop/restart/status/logs）",
   "bin": "index.ts"
 }

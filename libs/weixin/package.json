@@ -1,0 +1,8 @@
+{
+  "name": "weixin",
+  "description": "微信 Bot 收发消息：QR 登录、长轮询 getUpdates、发文本/图片/视频/文件、CDN AES 上传下载",
+  "bin": "index.ts",
+  "dependencies": {
+    "qrcode-terminal": "0.12.0"
+  }
+}

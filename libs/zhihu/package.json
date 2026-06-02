@@ -1,0 +1,5 @@
+{
+  "name": "zhihu",
+  "description": "查看知乎问题、回答和评论",
+  "bin": "index.ts"
+}

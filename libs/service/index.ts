@@ -176,13 +176,14 @@ Subcommands:
   stop <name>             systemctl --user stop
   restart <name>          systemctl --user restart
   status <name>           systemctl --user status
+  logs <name> [args...]   journalctl --user -u <unit>（默认 -n 200，附加参数透传，如 -f / --since '1h ago'）
 
 服务通过扫描 libs/*/package.json 中的 \`service\` 字段发现。
 生成的 unit 命名为 ${UNIT_PREFIX}<name>.service。
 `;
 
 async function main() {
-  const [sub, name] = process.argv.slice(2);
+  const [sub, name, ...rest] = process.argv.slice(2);
   if (!sub || sub === "-h" || sub === "--help") {
     console.log(HELP);
     process.exit(sub ? 0 : 1);
@@ -204,6 +205,15 @@ async function main() {
       const svc = pickService(services, name);
       const r = await sctl([sub, svc.unitName]);
       process.exit(r.code);
+    }
+    case "logs": {
+      const svc = pickService(services, name);
+      const args = rest.length === 0 ? ["-n", "200"] : rest;
+      const proc = Bun.spawn(
+        ["journalctl", "--user", "-u", svc.unitName, ...args],
+        { stdin: "inherit", stdout: "inherit", stderr: "inherit" },
+      );
+      process.exit(await proc.exited);
     }
     default:
       fail(`Unknown subcommand: ${sub}\n\n${HELP}`);

@@ -1,0 +1,5 @@
+{
+  "name": "xiaohongshu",
+  "description": "小红书创作者平台发布图文笔记",
+  "bin": "index.ts"
+}
