@@ -138,29 +138,31 @@ async function readSecret(prompt: string): Promise<string> {
 import { readdirSync, readFileSync } from "fs";
 import { resolve } from "path";
 
-async function cmdSetup() {
+function scanDeclaredKeys(): { lib: string; key: string }[] {
   const libsDir = resolve(import.meta.dir, "..");
   const entries = readdirSync(libsDir, { withFileTypes: true });
-
-  // 扫描所有 package.json 中的 vault 声明
-  const required: { lib: string; key: string }[] = [];
+  const result: { lib: string; key: string }[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.name === "vault") continue;
     const pkgPath = resolve(libsDir, entry.name, "package.json");
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
       if (Array.isArray(pkg.vault)) {
-        for (const key of pkg.vault) required.push({ lib: entry.name, key });
+        for (const key of pkg.vault) result.push({ lib: entry.name, key });
       }
     } catch {}
   }
+  return result;
+}
+
+async function cmdSetup() {
+  const required = scanDeclaredKeys();
 
   if (required.length === 0) {
     console.log("没有子命令声明 vault key");
     return;
   }
 
-  // 获取已有 key
   const existing = await loadAll();
   const existingKeys = new Set(existing.map(e => e.key));
 
@@ -185,7 +187,6 @@ async function cmdSetup() {
 
   console.log(`\n需要配置 ${missing} 个 key，跳过 ${skipped} 个已存在的\n`);
 
-  // 逐个配置缺失的 key
   for (const { lib, key } of required) {
     if (existingKeys.has(key)) continue;
 
@@ -213,6 +214,63 @@ async function cmdSetup() {
   console.log("配置完成");
 }
 
+async function cmdExport() {
+  const entries = await loadAll();
+  console.log(JSON.stringify(entries, null, 2));
+}
+
+async function cmdImport() {
+  const stdin = (await new Response(process.stdin).text()).trim();
+  if (!stdin) throw new Error("stdin 为空，请通过管道传入 JSON");
+
+  let data: any[];
+  try {
+    data = JSON.parse(stdin);
+  } catch (e) {
+    throw new Error(`JSON 解析失败: ${(e as Error).message}`);
+  }
+
+  if (!Array.isArray(data)) throw new Error("JSON 必须是数组");
+
+  const existing = await loadAll();
+  const existingMap = new Map(existing.map(e => [e.key, e]));
+  let added = 0;
+  let updated = 0;
+
+  for (const item of data) {
+    if (!item.key || !item.value) continue;
+    const type: VaultType = item.type === "totp" ? "totp" : "simple";
+    if (existingMap.has(item.key)) {
+      updated++;
+    } else {
+      added++;
+    }
+    await put(item.key, item.value, type);
+  }
+
+  console.log(`导入完成: ${added} 新增, ${updated} 更新`);
+}
+
+async function cmdAutoremove() {
+  const declared = scanDeclaredKeys();
+  const declaredKeys = new Set(declared.map(d => d.key));
+  const existing = await loadAll();
+
+  const toRemove = existing.filter(e => !declaredKeys.has(e.key));
+
+  if (toRemove.length === 0) {
+    console.log("没有需要清理的 key");
+    return;
+  }
+
+  console.log(`将删除 ${toRemove.length} 个未声明的 key:\n`);
+  for (const e of toRemove) {
+    console.log(`  ${e.type === "totp" ? "🔢" : "🔑"} ${e.key}`);
+    await del(e.key);
+  }
+  console.log(`\n已删除 ${toRemove.length} 个 key`);
+}
+
 if (import.meta.main) {
   const args = process.argv.slice(2);
   const totpFlag = args.includes("--totp");
@@ -224,6 +282,9 @@ if (import.meta.main) {
     console.error("       vault put <key> [--totp]");
     console.error("       vault list");
     console.error("       vault setup");
+    console.error("       vault export");
+    console.error("       vault import     (reads JSON from stdin)");
+    console.error("       vault autoremove");
     process.exit(1);
   };
 
@@ -260,6 +321,18 @@ if (import.meta.main) {
       }
       case "setup": {
         await cmdSetup();
+        break;
+      }
+      case "export": {
+        await cmdExport();
+        break;
+      }
+      case "import": {
+        await cmdImport();
+        break;
+      }
+      case "autoremove": {
+        await cmdAutoremove();
         break;
       }
       default: usage();
