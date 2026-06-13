@@ -1,0 +1,11 @@
+{
+  "name": "dlna",
+  "description": "DLNA 媒体渲染器(DMR)：接收手机/电脑投射，在 Windows 屏幕全屏播放，支持手机端暂停/拖进度/停止/音量",
+  "bin": "index.ts",
+  "service": {
+    "exec": "bun index.ts serve",
+    "description": "DLNA 渲染器：投屏到 Windows 屏幕（mpv 全屏）",
+    "restart": "always",
+    "restartSec": 5
+  }
+}

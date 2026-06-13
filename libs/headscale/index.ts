@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, existsSync } from "fs";
 import { getEntry, totp } from "../vault/index.ts";
 
 const HEADSCALE_SERVER = "https://headscale.yjgbg.com:28443";
-const API_BASE = "http://49.235.170.57:9100";
+const API_BASE = "http://headscale.yjgbg.com:9100";
 const VAULT_KEY = "headscale_mfa";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────

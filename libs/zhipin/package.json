@@ -1,0 +1,5 @@
+{
+  "name": "zhipin",
+  "description": "BOSS直聘：登录、搜索职位/项目、查看职位详情",
+  "bin": "index.ts"
+}

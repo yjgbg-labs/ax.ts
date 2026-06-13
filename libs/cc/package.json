@@ -1,5 +1,0 @@
-{
-  "name": "cc",
-  "description": "启动 Claude Code（copilot / ds / mimo）",
-  "bin": "index.ts"
-}
