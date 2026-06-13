@@ -1,5 +1,6 @@
 {
   "name": "tts",
   "description": "小米 MiMo TTS 文本转语音（默认 mimo-v2.5-tts，下载到 ~/Music/ax-tts/）",
-  "bin": "index.ts"
+  "bin": "index.ts",
+  "vault": ["mimo_token_plan_token"]
 }

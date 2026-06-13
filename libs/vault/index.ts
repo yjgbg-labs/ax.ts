@@ -135,6 +135,84 @@ async function readSecret(prompt: string): Promise<string> {
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
+import { readdirSync, readFileSync } from "fs";
+import { resolve } from "path";
+
+async function cmdSetup() {
+  const libsDir = resolve(import.meta.dir, "..");
+  const entries = readdirSync(libsDir, { withFileTypes: true });
+
+  // 扫描所有 package.json 中的 vault 声明
+  const required: { lib: string; key: string }[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === "vault") continue;
+    const pkgPath = resolve(libsDir, entry.name, "package.json");
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+      if (Array.isArray(pkg.vault)) {
+        for (const key of pkg.vault) required.push({ lib: entry.name, key });
+      }
+    } catch {}
+  }
+
+  if (required.length === 0) {
+    console.log("没有子命令声明 vault key");
+    return;
+  }
+
+  // 获取已有 key
+  const existing = await loadAll();
+  const existingKeys = new Set(existing.map(e => e.key));
+
+  console.log(`扫描到 ${required.length} 个 vault key：\n`);
+
+  let missing = 0;
+  let skipped = 0;
+  for (const { lib, key } of required) {
+    if (existingKeys.has(key)) {
+      console.log(`  🔑 ${key} (${lib}) — 已存在`);
+      skipped++;
+    } else {
+      console.log(`  🔑 ${key} (${lib}) — 缺失`);
+      missing++;
+    }
+  }
+
+  if (missing === 0) {
+    console.log(`\n全部 ${skipped} 个 key 已配置`);
+    return;
+  }
+
+  console.log(`\n需要配置 ${missing} 个 key，跳过 ${skipped} 个已存在的\n`);
+
+  // 逐个配置缺失的 key
+  for (const { lib, key } of required) {
+    if (existingKeys.has(key)) continue;
+
+    console.log(`[${lib}] 配置 ${key}`);
+    const isTotp = key.includes("totp") || key.includes("mfa");
+
+    const value = await readSecret(`  值: `);
+    if (!value) {
+      console.log(`  跳过\n`);
+      continue;
+    }
+
+    if (isTotp) {
+      try { base32Decode(value); } catch {
+        console.error(`  ⚠ 无效的 base32，跳过\n`);
+        continue;
+      }
+      await put(key, value.replace(/\s+/g, "").toUpperCase(), "totp");
+    } else {
+      await put(key, value, "simple");
+    }
+    console.log(`  ✓ 已保存\n`);
+  }
+
+  console.log("配置完成");
+}
+
 if (import.meta.main) {
   const args = process.argv.slice(2);
   const totpFlag = args.includes("--totp");
@@ -145,10 +223,7 @@ if (import.meta.main) {
     console.error("Usage: vault get|delete <key>");
     console.error("       vault put <key> [--totp]");
     console.error("       vault list");
-    console.error("");
-    console.error("  put          reads value from stdin (hidden, sudo-style)");
-    console.error("  --totp       on put: store as base32 TOTP secret (type=totp)");
-    console.error("  get          returns the value; for type=totp keys, returns the current 6-digit OTP");
+    console.error("       vault setup");
     process.exit(1);
   };
 
@@ -181,6 +256,10 @@ if (import.meta.main) {
       case "list": {
         const icon: Record<VaultType, string> = { simple: "🔑", totp: "🔢" };
         for (const e of await list()) console.log(`${icon[e.type]} ${e.key}`);
+        break;
+      }
+      case "setup": {
+        await cmdSetup();
         break;
       }
       default: usage();

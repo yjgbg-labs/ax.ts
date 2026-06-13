@@ -1,5 +1,6 @@
 {
   "name": "headscale",
   "description": "管理 tailscale 客户端和 headscale VPN 连接",
-  "bin": "index.ts"
+  "bin": "index.ts",
+  "vault": ["headscale_mfa"]
 }

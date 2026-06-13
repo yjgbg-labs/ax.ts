@@ -1,5 +1,6 @@
 {
   "name": "telegram",
   "description": "Telegram Bot 消息收发（send / updates / chats）",
-  "bin": "index.ts"
+  "bin": "index.ts",
+  "vault": ["telegram_yjgbg_claude_bot_token"]
 }

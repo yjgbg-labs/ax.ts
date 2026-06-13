@@ -1,5 +1,6 @@
 {
   "name": "t2i",
   "description": "百炼文生图（默认 wan2.7-image-pro，同步调用，默认下载到 ~/Pictures/ax-t2i/）",
-  "bin": "index.ts"
+  "bin": "index.ts",
+  "vault": ["text2image_apikey"]
 }
