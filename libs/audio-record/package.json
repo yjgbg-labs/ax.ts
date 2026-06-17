@@ -1,0 +1,5 @@
+{
+  "name": "audio-record",
+  "description": "录制 Windows 系统音频（通过 PowerShell 调用 ffmpeg）",
+  "bin": "index.ts"
+}
