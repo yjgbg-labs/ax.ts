@@ -1,94 +1,132 @@
 #!/usr/bin/env bun
-// ax-dlna：DLNA MediaRenderer(DMR)，把投射的媒体在 Windows 屏幕用 mpv 全屏播放
+// ax-dlna: DLNA MediaRenderer — casts media to Windows screen via mpv fullscreen
 import { randomUUID } from "node:crypto";
+import { XMLParser } from "fast-xml-parser";
 import { SSDPServer } from "./ssdp";
 import { Player } from "./player";
 import {
-  deviceXML,
-  AVTRANSPORT_SCPD,
-  RENDERINGCONTROL_SCPD,
-  CONNECTIONMANAGER_SCPD,
-  SINK_PROTOCOL_INFO,
-  esc,
+  deviceXML, AVTRANSPORT_SCPD, RENDERINGCONTROL_SCPD, CONNECTIONMANAGER_SCPD,
+  SINK_PROTOCOL_INFO, esc,
 } from "./xml";
 import { HTTP_PORT, getUDN, getLanIP, FRIENDLY_NAME } from "./config";
 
 type TransportState = "STOPPED" | "PLAYING" | "PAUSED_PLAYBACK" | "TRANSITIONING" | "NO_MEDIA_PRESENT";
 
 const state = {
-  uri: "",
-  metadata: "",
-  title: "",
+  uri: "", metadata: "", title: "",
   transport: "NO_MEDIA_PRESENT" as TransportState,
-  volume: 100,
-  mute: false,
+  volume: 100, mute: false,
 };
 
 const player = new Player();
 
-// ---------- SOAP 工具 ----------
+// ---------- GENA events ----------
+
+interface Sub { callback: string; sid: string; expires: number; seq: number; }
+const subs = new Map<string, Sub[]>(); // service -> subscriptions
+
+// The LastChange payload is a full Event document that must be XML-escaped once
+// as text. Escaping the whole doc (not just the InstanceID wrapper) keeps the
+// inner state-variable elements inside the escaped string, and the metadata
+// namespace lets control points actually parse the change.
+function lastChange(service: string, vars: Record<string, string>): string {
+  const inner = Object.entries(vars).map(([k, v]) => `<${k} val="${esc(v)}"/>`).join("");
+  const ns = service === "RenderingControl"
+    ? "urn:schemas-upnp-org:metadata-1-0/RCS/"
+    : "urn:schemas-upnp-org:metadata-1-0/AVT/";
+  const evt = `<Event xmlns="${ns}"><InstanceID val="0">${inner}</InstanceID></Event>`;
+  return `<LastChange>${esc(evt)}</LastChange>`;
+}
+
+async function fireEvent(service: string, vars: Record<string, string>) {
+  const body = `<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0"><e:property>${
+    lastChange(service, vars)
+  }</e:property></e:propertyset>`;
+  const now = Date.now();
+  const alive = (subs.get(service) || []).filter((s) => s.expires > now);
+  subs.set(service, alive);
+  await Promise.all(alive.map((s) =>
+    fetch(s.callback, {
+      method: "NOTIFY",
+      headers: {
+        "Content-Type": 'text/xml; charset="utf-8"',
+        NT: "upnp:event", NTS: "upnp:propchange",
+        SID: s.sid, SEQ: String(s.seq++),
+      },
+      body,
+    }).catch(() => {}),
+  ));
+}
+
+function notify(service: string, vars: Record<string, string>) {
+  fireEvent(service, vars);
+}
+
+// ---------- SOAP helpers ----------
+
+const soapParser = new XMLParser({ ignoreAttributes: true, removeNSPrefix: true, stopNodes: ["*.CurrentURIMetaData"] });
 
 function getArg(body: string, name: string): string {
-  // 参数通常无命名空间前缀；非贪婪匹配，容忍属性
-  const re = new RegExp(`<${name}[^>]*>([\\s\\S]*?)</${name}>`, "i");
-  const m = re.exec(body);
-  return m ? xmlUnescape(m[1].trim()) : "";
+  try {
+    const args = soapParser.parse(body)?.Envelope?.Body;
+    if (!args || typeof args !== "object") return "";
+    for (const key of Object.keys(args)) {
+      const a = args[key];
+      if (a && typeof a === "object" && name in a) {
+        if (name === "CurrentURIMetaData" && typeof a[name] === "string") {
+          // stopNodes keeps the DIDL-Lite raw (still entity-escaped); return the
+          // bare DIDL document so state.metadata round-trips correctly.
+          return a[name].startsWith("&") ? xmlUnescape(a[name]) : a[name];
+        }
+        return String(a[name] ?? "");
+      }
+    }
+    return "";
+  } catch { return ""; }
 }
 
 function xmlUnescape(s: string): string {
-  return s
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
+  return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'").replace(/&amp;/g, "&");
 }
 
-function soapResponse(service: string, action: string, args: Record<string, string>): string {
-  const body = Object.entries(args)
-    .map(([k, v]) => `<${k}>${esc(v)}</${k}>`)
-    .join("");
+function soapResp(service: string, action: string, args: Record<string, string>): string {
+  const body = Object.entries(args).map(([k, v]) => `<${k}>${esc(v)}</${k}>`).join("");
   return `<?xml version="1.0" encoding="utf-8"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
 <s:Body><u:${action}Response xmlns:u="urn:schemas-upnp-org:service:${service}:1">${body}</u:${action}Response></s:Body>
 </s:Envelope>`;
 }
 
-function soapFault(code = "701", desc = "Action Failed"): Response {
-  const xml = `<?xml version="1.0"?>
-<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
-<s:Body><s:Fault><faultcode>s:Client</faultcode><faultstring>UPnPError</faultstring>
-<detail><UPnPError xmlns="urn:schemas-upnp-org:control-1-0"><errorCode>${code}</errorCode><errorDescription>${desc}</errorDescription></UPnPError></detail>
-</s:Fault></s:Body></s:Envelope>`;
-  return xmlResp(xml, 500);
-}
-
 function xmlResp(xml: string, status = 200): Response {
   return new Response(xml, {
     status,
-    headers: { "Content-Type": 'text/xml; charset="utf-8"', "EXT": "" },
+    headers: { "Content-Type": 'text/xml; charset="utf-8"', EXT: "", Connection: "close" },
   });
+}
+
+function soapFault(code = "701", desc = "Action Failed"): Response {
+  return xmlResp(`<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+<s:Body><s:Fault><faultcode>s:Client</faultcode><faultstring>UPnPError</faultstring>
+<detail><UPnPError xmlns="urn:schemas-upnp-org:control-1-0"><errorCode>${code}</errorCode><errorDescription>${desc}</errorDescription></UPnPError></detail>
+</s:Fault></s:Body></s:Envelope>`, 500);
 }
 
 function secToTime(s: number): string {
   s = Math.max(0, Math.floor(s));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  return `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
 
 function timeToSec(t: string): number {
   const parts = t.split(":").map(Number);
-  if (parts.some((n) => isNaN(n))) return 0;
-  let s = 0;
-  for (const p of parts) s = s * 60 + p;
-  return s;
+  if (parts.some(isNaN)) return 0;
+  return parts.reduce((s, p) => s * 60 + p, 0);
 }
 
 function titleFromDIDL(meta: string): string {
   const m = /<dc:title>([\s\S]*?)<\/dc:title>/i.exec(meta);
-  return m ? xmlUnescape(m[1]).trim() : "";
+  return m?.[1] ? xmlUnescape(m[1]).trim() : "";
 }
 
 // ---------- AVTransport ----------
@@ -104,105 +142,71 @@ async function handleAVTransport(action: string, body: string): Promise<Response
       console.log(`[av] SetAVTransportURI → ${state.title}`);
       await player.load(state.uri);
       state.transport = "PLAYING";
-      return xmlResp(soapResponse("AVTransport", action, {}));
+      notify("AVTransport", { TransportState: state.transport, AVTransportURI: state.uri, AVTransportURIMetaData: state.metadata || "NOT_IMPLEMENTED" });
+      return xmlResp(soapResp("AVTransport", action, {}));
     }
     case "Play":
       await player.play();
       state.transport = "PLAYING";
-      return xmlResp(soapResponse("AVTransport", action, {}));
+      notify("AVTransport", { TransportState: state.transport });
+      return xmlResp(soapResp("AVTransport", action, {}));
     case "Pause":
       await player.pause();
       state.transport = "PAUSED_PLAYBACK";
-      return xmlResp(soapResponse("AVTransport", action, {}));
+      notify("AVTransport", { TransportState: state.transport });
+      return xmlResp(soapResp("AVTransport", action, {}));
     case "Stop":
       await player.stop();
       state.transport = "STOPPED";
-      return xmlResp(soapResponse("AVTransport", action, {}));
+      notify("AVTransport", { TransportState: state.transport });
+      return xmlResp(soapResp("AVTransport", action, {}));
     case "Seek": {
-      const unit = getArg(body, "Unit");
-      const target = getArg(body, "Target");
-      if (unit === "REL_TIME" || unit === "ABS_TIME") {
-        await player.seek(timeToSec(target));
-      }
-      return xmlResp(soapResponse("AVTransport", action, {}));
+      const unit = getArg(body, "Unit"), target = getArg(body, "Target");
+      if (unit === "REL_TIME" || unit === "ABS_TIME") await player.seek(timeToSec(target));
+      return xmlResp(soapResp("AVTransport", action, {}));
     }
     case "GetTransportInfo": {
-      // 与 mpv 实况对账：播完/空闲则回 STOPPED
-      let st: TransportState = state.transport;
+      let st = state.transport;
       if (st === "PLAYING" || st === "PAUSED_PLAYBACK") {
         try {
           const pos = await player.getPosition();
-          if (pos.idle) {
-            st = "STOPPED";
-            state.transport = "STOPPED";
-          } else if (pos.paused && st !== "PAUSED_PLAYBACK") {
-            st = "PAUSED_PLAYBACK";
-          }
+          if (pos.idle) { st = "STOPPED"; state.transport = "STOPPED"; }
+          else if (pos.paused && st !== "PAUSED_PLAYBACK") st = "PAUSED_PLAYBACK";
         } catch {}
       }
-      return xmlResp(
-        soapResponse("AVTransport", action, {
-          CurrentTransportState: st,
-          CurrentTransportStatus: "OK",
-          CurrentSpeed: "1",
-        }),
-      );
+      return xmlResp(soapResp("AVTransport", action, {
+        CurrentTransportState: st, CurrentTransportStatus: "OK", CurrentSpeed: "1",
+      }));
     }
     case "GetPositionInfo": {
       let pos = { positionSec: 0, durationSec: 0 };
-      try {
-        const p = await player.getPosition();
-        pos = p;
-      } catch {}
-      const dur = secToTime(pos.durationSec);
-      const rel = secToTime(pos.positionSec);
-      return xmlResp(
-        soapResponse("AVTransport", action, {
-          Track: "1",
-          TrackDuration: dur,
-          TrackMetaData: state.metadata || "NOT_IMPLEMENTED",
-          TrackURI: state.uri,
-          RelTime: rel,
-          AbsTime: rel,
-          RelCount: "2147483647",
-          AbsCount: "2147483647",
-        }),
-      );
+      try { pos = await player.getPosition(); } catch {}
+      const time = secToTime(pos.positionSec);
+      return xmlResp(soapResp("AVTransport", action, {
+        Track: "1", TrackDuration: secToTime(pos.durationSec),
+        TrackMetaData: state.metadata || "NOT_IMPLEMENTED", TrackURI: state.uri,
+        RelTime: time, AbsTime: time, RelCount: "2147483647", AbsCount: "2147483647",
+      }));
     }
     case "GetMediaInfo": {
       let dur = "0:00:00";
-      try {
-        dur = secToTime((await player.getPosition()).durationSec);
-      } catch {}
-      return xmlResp(
-        soapResponse("AVTransport", action, {
-          NrTracks: state.uri ? "1" : "0",
-          MediaDuration: dur,
-          CurrentURI: state.uri,
-          CurrentURIMetaData: state.metadata || "NOT_IMPLEMENTED",
-          NextURI: "",
-          NextURIMetaData: "",
-          PlayMedium: "NETWORK",
-          RecordMedium: "NOT_IMPLEMENTED",
-          WriteStatus: "NOT_IMPLEMENTED",
-        }),
-      );
+      try { dur = secToTime((await player.getPosition()).durationSec); } catch {}
+      return xmlResp(soapResp("AVTransport", action, {
+        NrTracks: state.uri ? "1" : "0", MediaDuration: dur,
+        CurrentURI: state.uri, CurrentURIMetaData: state.metadata || "NOT_IMPLEMENTED",
+        NextURI: "", NextURIMetaData: "", PlayMedium: "NETWORK",
+        RecordMedium: "NOT_IMPLEMENTED", WriteStatus: "NOT_IMPLEMENTED",
+      }));
     }
     case "GetDeviceCapabilities":
-      return xmlResp(
-        soapResponse("AVTransport", action, {
-          PlayMedia: "NETWORK,HDD",
-          RecMedia: "NOT_IMPLEMENTED",
-          RecQualityModes: "NOT_IMPLEMENTED",
-        }),
-      );
+      return xmlResp(soapResp("AVTransport", action, {
+        PlayMedia: "NETWORK,HDD", RecMedia: "NOT_IMPLEMENTED", RecQualityModes: "NOT_IMPLEMENTED",
+      }));
     case "GetTransportSettings":
-      return xmlResp(
-        soapResponse("AVTransport", action, { PlayMode: "NORMAL", RecQualityMode: "NOT_IMPLEMENTED" }),
-      );
+      return xmlResp(soapResp("AVTransport", action, { PlayMode: "NORMAL", RecQualityMode: "NOT_IMPLEMENTED" }));
     case "Next":
     case "Previous":
-      return xmlResp(soapResponse("AVTransport", action, {}));
+      return xmlResp(soapResp("AVTransport", action, {}));
     default:
       return soapFault("401", "Invalid Action");
   }
@@ -213,21 +217,23 @@ async function handleAVTransport(action: string, body: string): Promise<Response
 async function handleRendering(action: string, body: string): Promise<Response> {
   switch (action) {
     case "GetVolume":
-      return xmlResp(soapResponse("RenderingControl", action, { CurrentVolume: String(state.volume) }));
+      return xmlResp(soapResp("RenderingControl", action, { CurrentVolume: String(state.volume) }));
     case "SetVolume": {
       state.volume = Number(getArg(body, "DesiredVolume")) || state.volume;
       await player.setVolume(state.volume);
-      return xmlResp(soapResponse("RenderingControl", action, {}));
+      notify("RenderingControl", { Volume: String(state.volume) });
+      return xmlResp(soapResp("RenderingControl", action, {}));
     }
     case "GetMute":
-      return xmlResp(soapResponse("RenderingControl", action, { CurrentMute: state.mute ? "1" : "0" }));
+      return xmlResp(soapResp("RenderingControl", action, { CurrentMute: state.mute ? "1" : "0" }));
     case "SetMute": {
       state.mute = getArg(body, "DesiredMute") === "1";
       await player.setMute(state.mute);
-      return xmlResp(soapResponse("RenderingControl", action, {}));
+      notify("RenderingControl", { Mute: state.mute ? "1" : "0" });
+      return xmlResp(soapResp("RenderingControl", action, {}));
     }
     case "ListPresets":
-      return xmlResp(soapResponse("RenderingControl", action, { CurrentPresetNameList: "FactoryDefaults" }));
+      return xmlResp(soapResp("RenderingControl", action, { CurrentPresetNameList: "FactoryDefaults" }));
     default:
       return soapFault("401", "Invalid Action");
   }
@@ -238,64 +244,76 @@ async function handleRendering(action: string, body: string): Promise<Response> 
 function handleConnMgr(action: string): Response {
   switch (action) {
     case "GetProtocolInfo":
-      return xmlResp(soapResponse("ConnectionManager", action, { Source: "", Sink: SINK_PROTOCOL_INFO }));
+      return xmlResp(soapResp("ConnectionManager", action, { Source: "", Sink: SINK_PROTOCOL_INFO }));
     case "GetCurrentConnectionIDs":
-      return xmlResp(soapResponse("ConnectionManager", action, { ConnectionIDs: "0" }));
+      return xmlResp(soapResp("ConnectionManager", action, { ConnectionIDs: "0" }));
     case "GetCurrentConnectionInfo":
-      return xmlResp(
-        soapResponse("ConnectionManager", action, {
-          RcsID: "0",
-          AVTransportID: "0",
-          ProtocolInfo: "",
-          PeerConnectionManager: "",
-          PeerConnectionID: "-1",
-          Direction: "Input",
-          Status: "OK",
-        }),
-      );
+      return xmlResp(soapResp("ConnectionManager", action, {
+        RcsID: "0", AVTransportID: "0", ProtocolInfo: "",
+        PeerConnectionManager: "", PeerConnectionID: "-1", Direction: "Input", Status: "OK",
+      }));
     default:
       return soapFault("401", "Invalid Action");
   }
 }
 
-// ---------- HTTP 服务 ----------
+// ---------- HTTP server ----------
 
 function serve(udn: string, ip: string): void {
   Bun.serve({
-    port: HTTP_PORT,
-    hostname: "0.0.0.0",
-    idleTimeout: 30,
+    // idleTimeout must comfortably exceed a cold-start SetAVTransportURI, which
+    // blocks while spawning the Windows bridge + mpv (can take several seconds);
+    // too low and Bun aborts the in-flight control connection mid-cast.
+    port: HTTP_PORT, hostname: "0.0.0.0", idleTimeout: 30,
     async fetch(req) {
-      const url = new URL(req.url);
-      const path = url.pathname;
+      const path = new URL(req.url).pathname;
       const method = req.method;
 
-      if (path === "/device.xml") return xmlResp(deviceXML(udn));
+      if (path === "/device.xml") { console.log("[http] GET /device.xml"); return xmlResp(deviceXML(udn)); }
       if (path === "/scpd/AVTransport.xml") return xmlResp(AVTRANSPORT_SCPD);
       if (path === "/scpd/RenderingControl.xml") return xmlResp(RENDERINGCONTROL_SCPD);
       if (path === "/scpd/ConnectionManager.xml") return xmlResp(CONNECTIONMANAGER_SCPD);
 
-      // GENA 订阅：返回 SID + TIMEOUT，控制点多数靠轮询，事件最小实现
+      // GENA subscribe/unsubscribe
       if (method === "SUBSCRIBE") {
-        return new Response(null, {
-          status: 200,
-          headers: {
-            SID: `uuid:${randomUUID()}`,
-            TIMEOUT: "Second-1800",
-            "Content-Length": "0",
-          },
-        });
+        const service = path.split("/").pop() || "";
+        const callback = req.headers.get("CALLBACK")?.replace(/[<>]/g, "") || "";
+        const sid = `uuid:${randomUUID()}`;
+        console.log(`[gena] SUBSCRIBE ${service} callback=${callback || "(none)"}`);
+        if (callback && (service === "AVTransport" || service === "RenderingControl")) {
+          const list = subs.get(service) || [];
+          list.push({ callback, sid, expires: Date.now() + 1800_000, seq: 0 });
+          subs.set(service, list);
+          // Send initial event
+          if (service === "AVTransport") {
+            fireEvent("AVTransport", { TransportState: state.transport, AVTransportURI: state.uri, AVTransportURIMetaData: state.metadata || "NOT_IMPLEMENTED" });
+          } else {
+            fireEvent("RenderingControl", { Volume: String(state.volume), Mute: state.mute ? "1" : "0" });
+          }
+        }
+        return new Response(null, { status: 200, headers: { SID: sid, TIMEOUT: "Second-1800", "Content-Length": "0" } });
       }
-      if (method === "UNSUBSCRIBE") return new Response(null, { status: 200 });
+      if (method === "UNSUBSCRIBE") {
+        const sid = req.headers.get("SID") || "";
+        for (const [svc, list] of subs) subs.set(svc, list.filter((s) => s.sid !== sid));
+        return new Response(null, { status: 200 });
+      }
 
+      // SOAP control
       if (method === "POST" && path.startsWith("/control/")) {
-        const soapAction = (req.headers.get("SOAPACTION") || "").replace(/"/g, "");
-        const action = soapAction.split("#")[1] || "";
+        const action = (req.headers.get("SOAPACTION") || "").replace(/"/g, "").split("#")[1] || "";
         const body = await req.text();
+        const t0 = Date.now();
         try {
-          if (path === "/control/AVTransport") return await handleAVTransport(action, body);
-          if (path === "/control/RenderingControl") return await handleRendering(action, body);
-          if (path === "/control/ConnectionManager") return handleConnMgr(action);
+          let resp: Response;
+          if (path === "/control/AVTransport") resp = await handleAVTransport(action, body);
+          else if (path === "/control/RenderingControl") resp = await handleRendering(action, body);
+          else if (path === "/control/ConnectionManager") resp = handleConnMgr(action);
+          else return soapFault("401", "Invalid Service");
+          const ms = Date.now() - t0;
+          if (ms > 500) console.warn(`[soap] ${action} SLOW ${ms}ms`);
+          else console.log(`[soap] ${action} ${ms}ms`);
+          return resp;
         } catch (e) {
           console.error(`[soap] ${action} error:`, e);
           return soapFault();
@@ -308,7 +326,7 @@ function serve(udn: string, ip: string): void {
   console.log(`[http] http://${ip}:${HTTP_PORT}/device.xml`);
 }
 
-// ---------- 入口 ----------
+// ---------- Entry ----------
 
 async function main() {
   const sub = process.argv[2] ?? "serve";

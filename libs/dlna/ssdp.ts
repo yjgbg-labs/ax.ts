@@ -94,7 +94,10 @@ export class SSDPServer {
       "",
     ];
     const buf = Buffer.from(lines.join("\r\n"));
-    this.sock.send(buf, rinfo.port, rinfo.address);
+    this.sock.send(buf, rinfo.port, rinfo.address, (err) => {
+      if (err) console.error(`[ssdp] sendResponse error to ${rinfo.address}:${rinfo.port}:`, err);
+      else console.log(`[ssdp] → response to ${rinfo.address}:${rinfo.port} ST=${target}`);
+    });
   }
 
   private alive(): void {
@@ -117,7 +120,9 @@ export class SSDPServer {
       "",
     ];
     const buf = Buffer.from(lines.join("\r\n"));
-    this.sock.send(buf, SSDP_PORT, SSDP_ADDR);
+    this.sock.send(buf, SSDP_PORT, SSDP_ADDR, (err) => {
+      if (err) console.error(`[ssdp] notify error for ${target}:`, err);
+    });
   }
 
   stop(): void {
