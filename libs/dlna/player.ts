@@ -7,8 +7,7 @@ import { BRIDGE_PORT } from "./config";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BRIDGE_SRC = resolve(HERE, "bridge.ps1");
-const BRIDGE_WIN = "C:\\Windows\\Temp\\ax-dlna-bridge.ps1";
-const BRIDGE_WIN_WSL = "/mnt/c/Windows/Temp/ax-dlna-bridge.ps1";
+const BRIDGE_BASENAME = "ax-dlna-bridge.ps1";
 const PIPE_NAME = "ax-dlna-mpv";
 
 // systemd 服务的 PATH 不含 Windows 目录，必须用绝对路径调 powershell（交互 shell 靠 interop 自动加 PATH，服务里没有）
@@ -32,6 +31,8 @@ export class Player {
   private rid = 1;
   private queue: Promise<unknown> = Promise.resolve();
   private mpvPath = "mpv";
+  private bridgeWin?: string; // bridge.ps1 的 Windows 路径（部署到当前用户 Temp）
+  private bridgeWinWsl?: string; // 对应的 WSL 路径
   private starting?: Promise<void>;
 
   async ensureBridge(): Promise<void> {
@@ -47,9 +48,10 @@ export class Player {
 
   private async _start(): Promise<void> {
     this.mpvPath = await resolveMpvPath();
-    copyFileSync(BRIDGE_SRC, BRIDGE_WIN_WSL);
-    // 已在跑就复用，避免重复 listener（端口占用）
+    await this.resolveBridgePaths();
+    // 已在跑就复用：避免重复 listener（端口占用），也避免去碰正在被使用的脚本
     if (!(await this.ping())) {
+      this.deployBridge(); // 仅在需要启动新 bridge 时部署脚本
       await this.killStrayBridges(); // 没有活的 bridge → 清掉可能半死的残留，再起新的
       this.bridgeProc = Bun.spawn(
         [
@@ -58,7 +60,7 @@ export class Player {
           "-ExecutionPolicy",
           "Bypass",
           "-File",
-          BRIDGE_WIN,
+          this.bridgeWin!,
           "-Port",
           String(BRIDGE_PORT),
           "-PipeName",
@@ -74,6 +76,40 @@ export class Player {
       }
     }
     await this.connect();
+  }
+
+  // systemd user 服务对 C:\Windows\Temp 里已存在文件无访问权（Windows ACL 仅允许普通
+  // 用户在该目录新建文件，不能覆盖/读取已有文件），因此 bridge 脚本必须放到当前用户
+  // 自己的 Temp 目录（%TEMP%），否则脚本一旦存在，后续每次投屏都会 copyfile EACCES。
+  private async resolveBridgePaths(): Promise<void> {
+    if (this.bridgeWin && this.bridgeWinWsl) return;
+    let win = "";
+    try {
+      const p = Bun.spawn([PWSH, "-NoProfile", "-Command", "[System.IO.Path]::GetTempPath()"], {
+        stdout: "pipe",
+        stderr: "ignore",
+      });
+      win = (await new Response(p.stdout).text()).trim();
+    } catch {}
+    win = win.replace(/[\\/]+$/, "") || "C:\\Windows\\Temp";
+    let wsl = "";
+    try {
+      const wp = Bun.spawn(["wslpath", "-u", win], { stdout: "pipe", stderr: "ignore" });
+      wsl = (await new Response(wp.stdout).text()).trim();
+    } catch {}
+    if (!wsl) wsl = "/mnt/" + win[0].toLowerCase() + win.slice(2).replace(/\\/g, "/");
+    this.bridgeWin = `${win}\\${BRIDGE_BASENAME}`;
+    this.bridgeWinWsl = `${wsl}/${BRIDGE_BASENAME}`;
+  }
+
+  private deployBridge(): void {
+    try {
+      copyFileSync(BRIDGE_SRC, this.bridgeWinWsl!);
+    } catch (e) {
+      // 目标可能被运行中的 bridge 占用或无权覆盖；已有可用脚本则沿用，不让投屏失败
+      if (!existsSync(this.bridgeWinWsl!)) throw e;
+      console.warn(`[dlna] 复用已存在 bridge 脚本（更新失败: ${(e as Error).message}）`);
+    }
   }
 
   private ping(): Promise<boolean> {
